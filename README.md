@@ -1,16 +1,16 @@
 # Football Player Market Value Prediction
 
-Machine-learning projekat za procenu tržišne vrednosti fudbalera na osnovu učinka na terenu, karakteristika igrača, lige i klupskog konteksta.
+A machine learning project for predicting football players' market values based on on-field performance, player characteristics, competition, and club context.
 
-Pipeline spaja statistike za sezonu 2024/25 sa istorijskim Transfermarkt valuacijama. Trenutno se modeluju outfield igrači; golmani su izdvojeni jer zahtevaju drugačije metrike.
+The pipeline combines 2024/25 season performance statistics with historical Transfermarkt valuations. The current version focuses on outfield players; goalkeepers are handled separately because they require a different set of performance metrics.
 
-## Struktura projekta
+## Project Structure
 
 ```text
 football-market-value-prediction/
 ├── data/
-│   ├── raw/                         # izvorni CSV fajlovi
-│   └── processed/                   # generisani međurezultati (gitignored)
+│   ├── raw/                         # source CSV files
+│   └── processed/                   # generated intermediate outputs (gitignored)
 ├── notebooks/
 │   ├── 01_eda.ipynb
 │   ├── 02_data_matching.ipynb
@@ -26,67 +26,217 @@ football-market-value-prediction/
 └── .gitignore
 ```
 
-## Notebook workflow
+## Notebook Workflow
 
-Notebookovi se pokreću redom:
+The notebooks should be run in order:
 
-1. **`01_eda.ipynb`** — kvalitet podataka, duplikati, missing values, GK/outfield split, minuti, početni feature-i i distribucija targeta.
-2. **`02_data_matching.ipynb`** — agregacija igrača, `identity_key`, `MainSquad`, sezonske valuacije i exact → normalized → fuzzy → ambiguous matching. Rezultat je `data/processed/final_players.csv` uz audit tabele za prihvaćene i nerešene identitete.
-3. **`03_feature_engineering.ipynb`** — log target, availability indikatori, jedan train/test split, raw/per-90 feature-i i reliability shrinkage. Rezultat su `train_features.csv` i `test_features.csv`.
-4. **`04_modeling.ipynb`** — modeli A–I, RF/XGBoost feature importance, Model H (klub), Model I (prethodna tržišna vrednost), ablation, error analysis i grafikoni.
+1. **`01_eda.ipynb`** — data quality analysis, duplicates, missing values, goalkeeper/outfield split, playing time, initial feature selection, and target distribution.
+2. **`02_data_matching.ipynb`** — player aggregation, `identity_key`, `MainSquad`, seasonal valuations, and exact → normalized → fuzzy → ambiguous entity matching. The output is `data/processed/final_players.csv`, together with audit tables for accepted and unresolved identities.
+3. **`03_feature_engineering.ipynb`** — log-transformed target, availability indicators, a single train/test split, raw and per-90 features, and reliability shrinkage. The outputs are `train_features.csv` and `test_features.csv`.
+4. **`04_modeling.ipynb`** — Models A–I, Random Forest and XGBoost feature importance, Model H with club context, Model I with previous market value, ablation analysis, error analysis, and visualizations.
 
-Zajednička logika je u `src/`, pa notebookovi ostaju kratki i fokusirani na objašnjenje i rezultate.
+Shared logic is stored in `src/`, keeping the notebooks concise and focused on explanation and results.
 
-## Ključne metodološke odluke
+## Key Methodological Decisions
 
-### Agregacija i identitet
+### Player Aggregation and Identity
 
-Igrač može imati više redova nakon promene kluba. Counting statistike se sabiraju, `MainSquad`, glavna pozicija i liga dolaze iz reda sa najviše minuta, a procenti se ponovo računaju iz ukupnih brojilaca i imenilaca. Poznate same-name/same-age kolizije rešavaju se eksplicitno i auditabilno u `src/data_processing.py`.
+A player may have multiple rows after changing clubs during the season.
 
-### Entity matching
+Counting statistics are summed, while `MainSquad`, primary position, and competition are taken from the row in which the player recorded the most minutes. Percentage-based statistics are recalculated from their aggregated numerators and denominators.
 
-Performance i Transfermarkt podaci nemaju zajednički identifikator. Matching zato koristi četiri faze:
+Known same-name/same-age identity collisions are resolved explicitly and in an auditable manner in `src/data_processing.py`.
 
-1. jedinstveno exact ime;
-2. jedinstveno normalizovano ime;
-3. fuzzy ime uz proveru kluba i uzrasta;
-4. disambiguation exact imena uz klub i uzrast.
+### Entity Matching
 
-Conservation provere garantuju da se identiteti ne dupliraju niti tiho gube tokom join operacija.
+The performance and Transfermarkt datasets do not share a common identifier.
 
-### Reliability-adjusted per 90
+Entity matching therefore follows four stages:
 
-Naive per-90 vrednosti mogu biti ekstremne kod malog broja minuta. Zato se stopa skuplja ka pozicionom proseku:
+1. unique exact-name matching;
+2. unique normalized-name matching;
+3. fuzzy name matching with club and age validation;
+4. disambiguation of exact-name collisions using club and age.
+
+Conservation checks ensure that player identities are neither duplicated nor silently lost during join operations.
+
+### Reliability-Adjusted Per-90 Features
+
+Naive per-90 statistics can become extreme for players with very limited playing time.
+
+To reduce this instability, each player's rate is shrunk toward the positional average:
 
 ```text
 w = Min / (Min + 450)
+
 adjusted = w * player_per90 + (1 - w) * position_baseline
 ```
 
-Pozicioni baseline se računa samo iz train skupa kako bi se sprečio leakage.
+The positional baseline is calculated using only the training set to prevent data leakage.
 
 ### Target
 
-Tržišne vrednosti su snažno right-skewed, pa modeli predviđaju:
+Market values are strongly right-skewed, so the models predict a log-transformed target:
 
 ```python
 log_market_value = np.log1p(market_value_in_eur)
 ```
 
-Metrike se prikazuju i na log skali i u evrima.
+Evaluation metrics are reported both in log space and in euros.
 
-## Pokretanje
+## Modeling
 
-Kreirajte virtuelno okruženje, instalirajte zavisnosti i pokrenite Jupyter:
+The project evaluates a sequence of increasingly capable models:
+
+- Raw Ridge Regression
+- Naive per-90 Ridge Regression
+- Reliability-adjusted per-90 Ridge Regression
+- Random Forest
+- Tuned Random Forest
+- XGBoost
+- Tuned XGBoost
+- XGBoost with club context
+- XGBoost with previous market value
+
+This progression makes it possible to evaluate the effect of feature engineering, nonlinear models, club context, and historical valuation information independently.
+
+## Results
+
+The best performance-based model uses XGBoost with player statistics, age, playing time, competition, position, and club context.
+
+It achieved:
+
+| Metric | Model H |
+|---|---:|
+| MAE (log) | 0.5203 |
+| RMSE (log) | 0.6805 |
+| R² | 0.7829 |
+| MAE (€) | €5.29M |
+
+Adding the player's most recent market valuation from before the start of the 2024/25 season creates a separate forecasting model.
+
+Model I achieved:
+
+| Metric | Model I |
+|---|---:|
+| MAE (log) | 0.3294 |
+| RMSE (log) | 0.4711 |
+| R² | 0.8959 |
+| MAE (€) | €3.43M |
+
+These models represent two related but distinct tasks:
+
+- **Model H — Performance-based valuation:** estimates market value from current-season football performance and context.
+- **Model I — Market-value forecasting:** predicts a new valuation using both historical valuation and current-season information.
+
+## Ablation Study
+
+To measure how much information comes from historical valuation versus current-season performance, the models were compared on the same subset of 415 test players with an available previous valuation.
+
+| Feature Set | MAE (log) | RMSE (log) | R² | MAE (€) |
+|---|---:|---:|---:|---:|
+| Previous value only | 0.5161 | 0.7753 | 0.6767 | €5.22M |
+| Performance + context | 0.5072 | 0.6631 | 0.7636 | €5.43M |
+| Previous value + performance + context | **0.3116** | **0.4384** | **0.8967** | **€3.48M** |
+
+The results indicate that historical valuation and current-season performance provide complementary information.
+
+The combined model substantially outperforms both the historical-value baseline and the performance-only model.
+
+## Error Analysis
+
+Error analysis showed that the forecasting model performs best when player valuations remain relatively stable.
+
+Large market-value changes are more difficult to predict, particularly for breakout players and major market repricing events.
+
+The correlation between absolute market-value change and absolute prediction error was approximately:
+
+```text
+0.56
+```
+
+This suggests that prediction difficulty increases as the magnitude of a player's market-value change increases.
+
+The model also tends to underestimate some extreme high-value players, illustrating the difficulty of predicting superstar valuations using structured performance data alone.
+
+## Running the Project
+
+Create a virtual environment:
 
 ```bash
 python -m venv .venv
+```
+
+Activate it and install the required dependencies:
+
+```bash
 python -m pip install -r requirements.txt
+```
+
+Launch Jupyter:
+
+```bash
 jupyter notebook
 ```
 
-Zatim izvršite notebookove od `01` do `04`. `RUN_TUNING = False` u modeling notebooku koristi fiksne parametre za brzo reprodukovanje; postavite ga na `True` da pokrenete `RandomizedSearchCV` za modele E i G.
+Then run the notebooks sequentially:
 
-## Podaci i generisani fajlovi
+```text
+01_eda.ipynb
+        ↓
+02_data_matching.ipynb
+        ↓
+03_feature_engineering.ipynb
+        ↓
+04_modeling.ipynb
+```
 
-Ulazni fajlovi su u `data/raw/`. Fajlovi u `data/processed/` i trenirani modeli su generisani artefakti i nisu verzionisani, osim `.gitkeep` placeholdera.
+`RUN_TUNING = False` in the modeling notebook uses fixed hyperparameters for fast and reproducible execution.
+
+Set:
+
+```python
+RUN_TUNING = True
+```
+
+to run `RandomizedSearchCV` for the tuned Random Forest and XGBoost models.
+
+## Data and Generated Files
+
+Input datasets are stored in `data/raw/`.
+
+Files in `data/processed/` and trained models are generated artifacts and are not version-controlled, except for `.gitkeep` placeholder files.
+
+The processing pipeline can regenerate these artifacts by running the notebooks in order.
+
+## Limitations
+
+The current version focuses on outfield players. Goalkeepers require position-specific performance metrics and are therefore excluded from the current modeling pipeline.
+
+Market value is influenced by factors that are not fully captured by match statistics, including reputation, contracts, transfer demand, injuries, international performances, and broader market conditions.
+
+The current evaluation also uses a random train/test split. A future version could use temporal validation across multiple seasons to evaluate performance on genuinely unseen future data.
+
+## Future Work
+
+Potential extensions include:
+
+- a dedicated goalkeeper model;
+- multi-season performance data;
+- temporal train/test validation;
+- contract information;
+- international appearances;
+- improved modeling of breakout players;
+- model explainability using SHAP;
+- automated prediction pipelines for future seasons.
+
+## Tech Stack
+
+- Python
+- pandas
+- NumPy
+- scikit-learn
+- XGBoost
+- RapidFuzz
+- Matplotlib
+- Jupyter
