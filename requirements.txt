@@ -1,3 +1,7 @@
 numpy
-matplotlib
 pandas
+matplotlib
+scikit-learn
+rapidfuzz
+xgboost
+jupyter

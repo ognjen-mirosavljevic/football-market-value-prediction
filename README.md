@@ -1,97 +1,92 @@
 # Football Player Market Value Prediction
 
-A machine learning project for predicting football player market values based on their on-pitch performance statistics, player characteristics, and competition data.
+Machine-learning projekat za procenu tržišne vrednosti fudbalera na osnovu učinka na terenu, karakteristika igrača, lige i klupskog konteksta.
 
-The project combines football performance statistics with historical Transfermarkt market valuations to build a dataset suitable for training regression models.
+Pipeline spaja statistike za sezonu 2024/25 sa istorijskim Transfermarkt valuacijama. Trenutno se modeluju outfield igrači; golmani su izdvojeni jer zahtevaju drugačije metrike.
 
-## Project Overview
+## Struktura projekta
 
-Football player market value depends on many factors, including age, position, playing time, attacking and defensive performance, and the competition in which the player plays.
+```text
+football-market-value-prediction/
+├── data/
+│   ├── raw/                         # izvorni CSV fajlovi
+│   └── processed/                   # generisani međurezultati (gitignored)
+├── notebooks/
+│   ├── 01_eda.ipynb
+│   ├── 02_data_matching.ipynb
+│   ├── 03_feature_engineering.ipynb
+│   └── 04_modeling.ipynb
+├── src/
+│   ├── data_processing.py
+│   ├── matching.py
+│   └── features.py
+├── models/
+├── README.md
+├── requirements.txt
+└── .gitignore
+```
 
-The goal of this project is to explore how well these factors can be used to estimate a player's market value using machine learning.
+## Notebook workflow
 
-The project currently focuses on outfield players, while goalkeepers will be handled separately because their performance metrics differ significantly.
+Notebookovi se pokreću redom:
 
-## Data
+1. **`01_eda.ipynb`** — kvalitet podataka, duplikati, missing values, GK/outfield split, minuti, početni feature-i i distribucija targeta.
+2. **`02_data_matching.ipynb`** — agregacija igrača, `identity_key`, `MainSquad`, sezonske valuacije i exact → normalized → fuzzy → ambiguous matching. Rezultat je `data/processed/final_players.csv` uz audit tabele za prihvaćene i nerešene identitete.
+3. **`03_feature_engineering.ipynb`** — log target, availability indikatori, jedan train/test split, raw/per-90 feature-i i reliability shrinkage. Rezultat su `train_features.csv` i `test_features.csv`.
+4. **`04_modeling.ipynb`** — modeli A–I, RF/XGBoost feature importance, Model H (klub), Model I (prethodna tržišna vrednost), ablation, error analysis i grafikoni.
 
-The project combines two main data sources:
+Zajednička logika je u `src/`, pa notebookovi ostaju kratki i fokusirani na objašnjenje i rezultate.
 
-- Player performance statistics for the 2024/25 season
-- Historical player market valuations from Transfermarkt data
+## Ključne metodološke odluke
 
-The performance dataset contains metrics related to:
+### Agregacija i identitet
 
-- Playing time
-- Goals and assists
-- Expected goals (xG) and expected assisted goals (xAG)
-- Shooting
-- Passing and progressive passing
-- Possession and progressive carries
-- Take-ons
-- Defensive actions
-- Ball recoveries
-- Aerial duels
+Igrač može imati više redova nakon promene kluba. Counting statistike se sabiraju, `MainSquad`, glavna pozicija i liga dolaze iz reda sa najviše minuta, a procenti se ponovo računaju iz ukupnih brojilaca i imenilaca. Poznate same-name/same-age kolizije rešavaju se eksplicitno i auditabilno u `src/data_processing.py`.
 
-## Data Processing
+### Entity matching
 
-Several preprocessing steps are performed before modeling.
+Performance i Transfermarkt podaci nemaju zajednički identifikator. Matching zato koristi četiri faze:
 
-### Player Aggregation
+1. jedinstveno exact ime;
+2. jedinstveno normalizovano ime;
+3. fuzzy ime uz proveru kluba i uzrasta;
+4. disambiguation exact imena uz klub i uzrast.
 
-Players may appear multiple times in the statistics dataset after changing clubs during the season.
+Conservation provere garantuju da se identiteti ne dupliraju niti tiho gube tokom join operacija.
 
-Their statistics are aggregated into a single player record while preserving relevant metadata such as clubs, primary position, and main competition.
+### Reliability-adjusted per 90
 
-### Percentage Statistics
+Naive per-90 vrednosti mogu biti ekstremne kod malog broja minuta. Zato se stopa skuplja ka pozicionom proseku:
 
-Percentage-based statistics such as:
+```text
+w = Min / (Min + 450)
+adjusted = w * player_per90 + (1 - w) * position_baseline
+```
 
-- Pass completion percentage
-- Take-on success percentage
-- Aerial duel win percentage
+Pozicioni baseline se računa samo iz train skupa kako bi se sprečio leakage.
 
-are recalculated from their underlying totals instead of averaging percentages across clubs.
+### Target
 
-### Market Value Matching
-
-Player statistics and market valuation data originate from different datasets and do not share a common player identifier.
-
-A multi-stage entity matching pipeline is therefore used:
-
-1. Exact name matching
-2. Normalized name matching
-3. Fuzzy name matching
-4. Club similarity validation
-5. Age validation
-6. Disambiguation of players sharing the same name
-
-Only high-confidence matches are retained.
-
-From 2,494 unique outfield players in the processed statistics dataset, 2,139 players were successfully matched with market valuation data.
-
-| Matching method | Players |
-|---|---:|
-| Exact name | 1,939 |
-| Normalized name | 133 |
-| High-confidence fuzzy | 44 |
-| Ambiguous exact name | 23 |
-| **Total** | **2,139** |
-
-This corresponds to approximately **85.8%** of the processed outfield player dataset.
-
-## Target Variable
-
-The prediction target is the player's market value in euros.
-
-Initial exploratory analysis shows that market values are strongly right-skewed, with a relatively small number of highly valuable players.
-
-For the matched dataset:
-
-- Median market value: €6.0M
-- Mean market value: €12.8M
-- Maximum market value: €200M
-
-A logarithmic transformation of the target is being explored to reduce skewness and improve regression performance.
+Tržišne vrednosti su snažno right-skewed, pa modeli predviđaju:
 
 ```python
 log_market_value = np.log1p(market_value_in_eur)
+```
+
+Metrike se prikazuju i na log skali i u evrima.
+
+## Pokretanje
+
+Kreirajte virtuelno okruženje, instalirajte zavisnosti i pokrenite Jupyter:
+
+```bash
+python -m venv .venv
+python -m pip install -r requirements.txt
+jupyter notebook
+```
+
+Zatim izvršite notebookove od `01` do `04`. `RUN_TUNING = False` u modeling notebooku koristi fiksne parametre za brzo reprodukovanje; postavite ga na `True` da pokrenete `RandomizedSearchCV` za modele E i G.
+
+## Podaci i generisani fajlovi
+
+Ulazni fajlovi su u `data/raw/`. Fajlovi u `data/processed/` i trenirani modeli su generisani artefakti i nisu verzionisani, osim `.gitkeep` placeholdera.

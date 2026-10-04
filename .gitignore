@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE and OS
+.idea/
+.DS_Store
+Thumbs.db
+
+# Generated project artifacts
+data/processed/*.csv
+models/*
+!data/processed/.gitkeep
+!models/.gitkeep
